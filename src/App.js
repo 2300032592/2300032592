@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import './App.css';
 
-const API_BASE = 'http://4.224.186.213/evaluation-service';
+const API_BASE = '/evaluation-service';
 const TYPE_WEIGHT = { Placement: 3, Result: 2, Event: 1 };
 
 function formatDate(ts) {
@@ -75,22 +75,44 @@ function App() {
 
     try {
       const res = await fetch(`${API_BASE}/notifications?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json'
+        }
       });
 
-      if (!res.ok) {
-        throw new Error(`Notifications API failed with status ${res.status}`);
+      const contentType = res.headers.get('content-type') || '';
+      const rawBody = await res.text();
+      let data = null;
+
+      if (rawBody && contentType.includes('application/json')) {
+        try {
+          data = JSON.parse(rawBody);
+        } catch {
+          throw new Error('API returned invalid JSON response.');
+        }
       }
 
-      const data = await res.json();
+      if (!res.ok) {
+        const apiMessage = data && (data.message || data.error);
+        throw new Error(apiMessage || `Notifications API failed with status ${res.status}`);
+      }
+
+      if (!contentType.includes('application/json')) {
+        throw new Error('API returned non-JSON response. Please verify token and endpoint.');
+      }
+
       const normalized = normalizeNotifications(data);
       setNotifications(normalized);
       setStatus(`Loaded ${normalized.length} notifications.`);
       await sendLog(token, 'info', 'api', `loaded notifications count=${normalized.length} page=${page} limit=${limit}`);
     } catch (err) {
-      setError(err.message);
+      const message = err.message === 'Failed to fetch'
+        ? 'Unable to reach API from browser. Check token/network and restart npm start to apply proxy changes.'
+        : err.message;
+      setError(message);
       setStatus('');
-      await sendLog(token, 'error', 'api', `load notifications failed: ${err.message}`);
+      await sendLog(token, 'error', 'api', `load notifications failed: ${message}`);
     } finally {
       setLoading(false);
     }
@@ -131,7 +153,7 @@ function App() {
 
       <main className="container">
         <section className="form-wrapper">
-          <h2>Stage 7 Frontend</h2>
+          <h2>Notifications Frontend</h2>
           <p className="hint">
             Pre-authorized route: paste token and load notifications from the provided API.
           </p>
