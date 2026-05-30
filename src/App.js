@@ -1,195 +1,250 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import './App.css';
 
-// Simple sample notifications used when server fetch is not available
-const SAMPLE_NOTIFICATIONS = [
-  { id: '1', type: 'Result', message: 'mid-sem', timestamp: '2026-04-22T17:51:30', read: false, priority: 2 },
-  { id: '2', type: 'Placement', message: 'CSX Corporation hiring', timestamp: '2026-04-22T17:51:18', read: false, priority: 3 },
-  { id: '3', type: 'Event', message: 'farewell', timestamp: '2026-04-22T17:51:06', read: true, priority: 1 },
-  { id: '4', type: 'Result', message: 'project-review', timestamp: '2026-04-22T17:50:42', read: false, priority: 2 },
-  { id: '5', type: 'Placement', message: 'Advanced Micro Devices Inc. hiring', timestamp: '2026-04-22T17:49:42', read: false, priority: 3 }
-];
+const API_BASE = 'http://4.224.186.213/evaluation-service';
+const TYPE_WEIGHT = { Placement: 3, Result: 2, Event: 1 };
 
 function formatDate(ts) {
-  try { return new Date(ts).toLocaleString(); } catch { return ts; }
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return ts;
+  }
 }
 
-function NotificationsPanel({ serverToken }) {
-  const [items, setItems] = useState(SAMPLE_NOTIFICATIONS);
-  const [filterType, setFilterType] = useState('all');
-  const [topN, setTopN] = useState(10);
-  const [sortByPriority, setSortByPriority] = useState(true);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    // Attempt to fetch from server only if token is provided.
-    if (!serverToken) return;
-    setLoading(true);
-    setError(null);
-    fetch('http://4.224.186.213/evaluation-service/notifications?limit=50', {
-      headers: { Authorization: `Bearer ${serverToken}` }
-    })
-      .then(r => {
-        if (!r.ok) throw new Error(`Server ${r.status}`);
-        return r.json();
+async function sendLog(token, level, pkg, messageText) {
+  if (!token) return;
+  try {
+    await fetch(`${API_BASE}/logs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        stack: 'frontend',
+        level,
+        package: pkg,
+        message: messageText
       })
-      .then(data => {
-        // server returns { notifications: [...] }
-        const n = data && data.notifications ? data.notifications : data;
-        const mapped = (n || []).map((it, idx) => ({
-          id: it.ID || it.id || String(idx),
-          type: it.Type || it.type || 'Result',
-          message: it.Message || it.message || JSON.stringify(it),
-          timestamp: it.Timestamp || it.timestamp || new Date().toISOString(),
-          read: !!it.read,
-          priority: it.priority || 2
-        }));
-        setItems(mapped);
-      })
-      .catch(err => setError(err.message))
-      .finally(() => setLoading(false));
-  }, [serverToken]);
-
-  const types = useMemo(() => {
-    const s = new Set(items.map(i => i.type));
-    return ['all', ...Array.from(s)];
-  }, [items]);
-
-  function toggleRead(id) {
-    setItems(prev => prev.map(it => it.id === id ? { ...it, read: !it.read } : it));
+    });
+  } catch {
+    // Ignore logging errors to avoid breaking the main UI flow.
   }
+}
 
-  function markAllRead() {
-    setItems(prev => prev.map(it => ({ ...it, read: true })));
-  }
-
-  const visible = useMemo(() => {
-    let arr = items.slice();
-    if (filterType !== 'all') arr = arr.filter(a => a.type === filterType);
-    if (sortByPriority) arr.sort((a, b) => (b.priority || 0) - (a.priority || 0));
-    arr = arr.slice(0, topN);
-    return arr;
-  }, [items, filterType, topN, sortByPriority]);
-
-  return (
-    <section className="notifications">
-      <h2>Notifications</h2>
-      <div className="controls">
-        <label>Type
-          <select value={filterType} onChange={e => setFilterType(e.target.value)}>
-            {types.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </label>
-        <label>Top
-          <input type="number" min={1} max={100} value={topN} onChange={e => setTopN(Number(e.target.value) || 1)} />
-        </label>
-        <label className="checkbox"><input type="checkbox" checked={sortByPriority} onChange={e => setSortByPriority(e.target.checked)} />Sort by priority</label>
-        <button onClick={markAllRead}>Mark all read</button>
-      </div>
-
-      {loading && <div className="hint">Loading from server…</div>}
-      {error && <div className="msg error">Failed to load: {error}</div>}
-
-      <ul className="list">
-        {visible.map(it => (
-          <li key={it.id} className={`item ${it.read ? 'read' : 'unread'}`}>
-            <div className="left">
-              <div className="type">{it.type}</div>
-              <div className="message">{it.message}</div>
-              <div className="meta">{formatDate(it.timestamp)} • priority:{it.priority}</div>
-            </div>
-            <div className="right">
-              <button onClick={() => toggleRead(it.id)}>{it.read ? 'Mark unread' : 'Mark read'}</button>
-            </div>
-          </li>
-        ))}
-      </ul>
-
-      <div className="note small">Tip: If server fetch fails due to CORS, use the PowerShell `get-auth.ps1` to obtain token and paste it above.</div>
-    </section>
-  );
+function normalizeNotifications(data) {
+  const list = data && data.notifications ? data.notifications : data;
+  return (list || []).map((item, idx) => ({
+    id: item.ID || item.id || String(idx),
+    type: item.Type || item.type || 'Event',
+    message: item.Message || item.message || '',
+    timestamp: item.Timestamp || item.timestamp || new Date().toISOString()
+  }));
 }
 
 function App() {
-  const [tab, setTab] = useState('registration');
-  const [form, setForm] = useState({ email: '', name: '', mobileNo: '', githubUsername: '', rollNo: '', accessCode: '' });
+  const [token, setToken] = useState('');
+  const [notifications, setNotifications] = useState([]);
+  const [readMap, setReadMap] = useState({});
+  const [view, setView] = useState('all');
+  const [notificationType, setNotificationType] = useState('');
+  const [limit, setLimit] = useState(10);
+  const [page, setPage] = useState(1);
+  const [topN, setTopN] = useState(10);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState(null);
-  const [tokenInput, setTokenInput] = useState('');
+  const [status, setStatus] = useState('');
+  const [error, setError] = useState('');
 
-  function handleChange(e) {
-    const { name, value } = e.target;
-    setForm(prev => ({ ...prev, [name]: value }));
-  }
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setMessage(null);
-    if (!form.email || !form.name || !form.rollNo) {
-      setMessage({ type: 'error', text: 'Please fill name, email and roll number.' });
+  async function loadNotifications() {
+    if (!token.trim()) {
+      setError('Please paste access token.');
       return;
     }
+
     setLoading(true);
+    setError('');
+    setStatus('Loading notifications from API...');
+
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    params.set('page', String(page));
+    if (notificationType) {
+      params.set('notification_type', notificationType);
+    }
+
     try {
-      const res = await fetch('http://4.224.186.213/evaluation-service/register', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form)
+      const res = await fetch(`${API_BASE}/notifications?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` }
       });
+
       if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(errText || `Status ${res.status}`);
+        throw new Error(`Notifications API failed with status ${res.status}`);
       }
-      const data = await res.json().catch(() => null);
-      setMessage({ type: 'success', text: 'Registration submitted successfully.' });
-      console.log('Registration response:', data);
+
+      const data = await res.json();
+      const normalized = normalizeNotifications(data);
+      setNotifications(normalized);
+      setStatus(`Loaded ${normalized.length} notifications.`);
+      await sendLog(token, 'info', 'api', `loaded notifications count=${normalized.length} page=${page} limit=${limit}`);
     } catch (err) {
-      setMessage({ type: 'error', text: 'Submission failed: ' + err.message });
-    } finally { setLoading(false); }
+      setError(err.message);
+      setStatus('');
+      await sendLog(token, 'error', 'api', `load notifications failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
   }
+
+  function isRead(id) {
+    return !!readMap[id];
+  }
+
+  async function markAsRead(id) {
+    setReadMap(prev => ({ ...prev, [id]: true }));
+    await sendLog(token, 'info', 'state', `notification marked read id=${id}`);
+  }
+
+  const allNotifications = useMemo(() => {
+    return notifications;
+  }, [notifications]);
+
+  const priorityNotifications = useMemo(() => {
+    return notifications
+      .filter(n => !isRead(n.id))
+      .slice()
+      .sort((a, b) => {
+        const weightDiff = (TYPE_WEIGHT[b.type] || 0) - (TYPE_WEIGHT[a.type] || 0);
+        if (weightDiff !== 0) return weightDiff;
+        return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+      })
+      .slice(0, topN);
+  }, [notifications, readMap, topN]);
+
+  const renderList = view === 'all' ? allNotifications : priorityNotifications;
 
   return (
     <div className="App">
       <header className="app-header">
-        <h1>Campus Notifications — Demo</h1>
-        <nav>
-          <button className={tab==='registration'? 'active':''} onClick={() => setTab('registration')}>Registration</button>
-          <button className={tab==='notifications'? 'active':''} onClick={() => setTab('notifications')}>Notifications</button>
-        </nav>
+        <h1>Campus Notifications</h1>
       </header>
 
       <main className="container">
-        {tab === 'registration' && (
-          <section className="form-wrapper">
-            <h2>Registration</h2>
-            <p className="hint">Fill the form and submit. Capture screenshots (mobile & desktop) after registering.</p>
+        <section className="form-wrapper">
+          <h2>Stage 7 Frontend</h2>
+          <p className="hint">
+            Pre-authorized route: paste token and load notifications from the provided API.
+          </p>
 
-            <form className="reg-form" onSubmit={handleSubmit}>
-              <label>Name<input name="name" value={form.name} onChange={handleChange} placeholder="Your full name" /></label>
-              <label>Email<input name="email" value={form.email} onChange={handleChange} placeholder="email@college.edu" /></label>
-              <label>Mobile No<input name="mobileNo" value={form.mobileNo} onChange={handleChange} placeholder="9999999999" /></label>
-              <label>GitHub Username<input name="githubUsername" value={form.githubUsername} onChange={handleChange} placeholder="github" /></label>
-              <label>Roll No<input name="rollNo" value={form.rollNo} onChange={handleChange} placeholder="23000xxxxx" /></label>
-              <label>Access Code<input name="accessCode" value={form.accessCode} onChange={handleChange} placeholder="(if provided)" /></label>
+          <div className="token-box">
+            <label>
+              Access Token
+              <input
+                value={token}
+                onChange={e => setToken(e.target.value)}
+                placeholder="Paste Bearer access token"
+              />
+            </label>
+          </div>
 
-              <div className="actions"><button type="submit" disabled={loading}>{loading ? 'Submitting…' : 'Submit'}</button></div>
-            </form>
+          <div className="controls controls-4">
+            <label>
+              Notification Type
+              <select value={notificationType} onChange={e => setNotificationType(e.target.value)}>
+                <option value="">All</option>
+                <option value="Event">Event</option>
+                <option value="Result">Result</option>
+                <option value="Placement">Placement</option>
+              </select>
+            </label>
 
-            {message && (<div className={`msg ${message.type}`}>{message.text}</div>)}
+            <label>
+              Limit
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={limit}
+                onChange={e => setLimit(Number(e.target.value) || 1)}
+              />
+            </label>
 
-            <div className="auth-box">
-              <label>Paste auth token here (optional):
-                <input value={tokenInput} onChange={e => setTokenInput(e.target.value)} placeholder="paste access_token value" />
-              </label>
-              <div className="small hint">If you have a server token, paste it and switch to Notifications tab to load real data.</div>
+            <label>
+              Page
+              <input
+                type="number"
+                min={1}
+                value={page}
+                onChange={e => setPage(Number(e.target.value) || 1)}
+              />
+            </label>
+
+            <div>
+              <button onClick={loadNotifications} disabled={loading}>
+                {loading ? 'Loading...' : 'Load Notifications'}
+              </button>
             </div>
+          </div>
 
-            <small className="note">Only Material UI or Vanilla CSS allowed for styling in submissions.</small>
-          </section>
-        )}
+          <div className="view-switch">
+            <button className={view === 'all' ? 'active' : ''} onClick={() => setView('all')}>
+              All Notifications
+            </button>
+            <button className={view === 'priority' ? 'active' : ''} onClick={() => setView('priority')}>
+              Priority Inbox
+            </button>
 
-        {tab === 'notifications' && (
-          <NotificationsPanel serverToken={tokenInput} />
-        )}
+            {view === 'priority' && (
+              <label>
+                Top N
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={topN}
+                  onChange={e => setTopN(Number(e.target.value) || 1)}
+                />
+              </label>
+            )}
+          </div>
+
+          {status && <div className="msg success">{status}</div>}
+          {error && <div className="msg error">{error}</div>}
+        </section>
+
+        <section className="notifications">
+          <h2>{view === 'all' ? 'All Notifications' : 'Priority Notifications'}</h2>
+          <ul className="list">
+            {renderList.map(item => {
+              const read = isRead(item.id);
+              return (
+                <li key={item.id} className={`item ${read ? 'read' : 'unread'}`}>
+                  <div className="left">
+                    <div className="type-row">
+                      <span className="type">{item.type}</span>
+                      <span className={`badge ${read ? 'viewed' : 'new'}`}>{read ? 'Viewed' : 'New'}</span>
+                    </div>
+                    <div className="message">{item.message}</div>
+                    <div className="meta">{formatDate(item.timestamp)}</div>
+                  </div>
+                  <div className="right">
+                    {!read && (
+                      <button onClick={() => markAsRead(item.id)}>Mark Read</button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+
+          {!loading && renderList.length === 0 && (
+            <div className="hint">No notifications to display for this view.</div>
+          )}
+
+          <small className="note">
+            Logging integration: all load/read actions are sent to the logging middleware API.
+          </small>
+        </section>
       </main>
     </div>
   );
